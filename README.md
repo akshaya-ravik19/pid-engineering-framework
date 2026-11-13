@@ -121,7 +121,7 @@ The synthetic demonstration now also writes `examples\exports\synthetic-original
 and its provenance JSON. The older generic schematic remains available in a collapsed
 optional section and is explicitly not original-fidelity output.
 
-## Run on this machine
+## Execution
 
 Open PowerShell:
 
@@ -231,7 +231,7 @@ alone is enough: both are required. No keys belong in source control.
 Azure credentials and a live deployment were not supplied. The SDK path is tested with
 mocked HTTP responses; live Azure behavior and engineering accuracy are not verified.
 
-## Limits you must understand
+## Limitations
 
 - No OCR for image-only pages; an explicit limitation is returned.
 - Rotated pages must be normalized before import. PDFs: 32 MiB / 50-page limits.
