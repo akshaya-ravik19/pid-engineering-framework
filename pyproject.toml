@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pid-framework"
+version = "0.3.0"
+description = "Evidence-linked P&ID review and equipment drawing prototype"
+requires-python = ">=3.12"
+dependencies = [
+    "agent-framework-core==1.25.0",
+    "agent-framework-openai>=1.18,<2",
+    "azure-identity>=1.25,<2",
+    "fastapi>=0.115,<1",
+    "pydantic-settings>=2.10,<3",
+    "pypdfium2>=4.30,<6",
+    "pypdf>=6,<7",
+    "opencv-python-headless>=4.11,<5",
+    "pillow>=11,<13",
+    "reportlab>=4.3,<5",
+    "uvicorn>=0.34,<1",
+]
+
+[dependency-groups]
+dev = ["httpx>=0.28,<1", "pytest>=8,<10", "pytest-asyncio>=1,<2", "ruff>=0.14,<1"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pid_framework"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
