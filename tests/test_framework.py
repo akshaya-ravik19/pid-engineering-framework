@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from openai import AsyncOpenAI
 from reportlab.pdfgen.canvas import Canvas
 
-from pid_framework.agents import AgentFrameworkReviewer
+from pid_framework.agents import GenerationAgents
 from pid_framework.api import create_app
 from pid_framework.models import (
     Document,
@@ -182,12 +182,6 @@ def test_full_api_persistence_selections_and_version_conflicts(tmp_path):
         base = f"/documents/{document_id}"
         assert client.get(f"{base}/pages/1.png").content.startswith(b"\x89PNG")
         assert client.get(f"{base}/pages/9.png").status_code == 422
-        assert (
-            client.post(
-                f"{base}/packages", json={"equipment_id": "equipment-1", "expected_version": 1}
-            ).status_code
-            == 422
-        )
         # A manually selected region can supply evidence for equipment and its specifications.
         response = client.post(
             f"{base}/selections",
@@ -202,47 +196,19 @@ def test_full_api_persistence_selections_and_version_conflicts(tmp_path):
         doc = response.json()
         assert doc["version"] == 2
         assert doc["graph"]["equipment"][-1]["confirmed"]
-        assert (
-            client.put(
-                f"{base}/graph", json={"expected_version": 1, "graph": doc["graph"]}
-            ).status_code
-            == 409
-        )
-        equipment = doc["graph"]["equipment"][-1]
-        equipment["specifications"] = [
-            {
-                "name": "Design pressure",
-                "value": "10 bar",
-                "evidence_ids": equipment["evidence_ids"],
+        stale = client.post(
+            f"{base}/selections",
+            json={
+                "expected_version": 1,
+                "location": {"page": 1, "bbox": [0.1, 0.1, 0.5, 0.5]},
             },
-            {
-                "name": "Design pressure",
-                "value": "12 bar",
-                "evidence_ids": equipment["evidence_ids"],
-            },
-        ]
-        doc = client.put(
-            f"{base}/graph", json={"expected_version": 2, "graph": doc["graph"]}
-        ).json()
-        response = client.post(f"{base}/reviews")
-        assert response.status_code == 201
-        review = response.json()
-        assert any(f["rule_id"] == "SPEC-CONFLICT" for f in review["findings"])
-        package = client.post(
-            f"{base}/packages",
-            json={"equipment_id": equipment["id"], "expected_version": doc["version"]},
         )
-        assert package.status_code == 201, package.text
-        package_id = package.json()["id"]
-        for extension, signature in [("svg", b"<svg"), ("pdf", b"%PDF-")]:
-            export = client.get(f"/packages/{package_id}/drawing.{extension}")
-            assert export.status_code == 200, export.text[:200]
-            assert export.content.startswith(signature)
-        assert client.get(f"/packages/{package_id}/drawing.exe").status_code == 404
+        assert stale.status_code == 409
+        for route in ["reviews", "packages", "reconstruction-proposals", "original-extracts"]:
+            assert client.post(f"{base}/{route}", json={}).status_code == 404
+        assert client.put(f"{base}/graph", json={}).status_code == 404
     with TestClient(create_app(tmp_path)) as client:
-        assert client.get(f"/reviews/{review['id']}").json() == review
-        assert client.get(f"/packages/{package_id}").json() == package.json()
-        assert client.get(base).json()["version"] == 3
+        assert client.get(base).json() == doc
 
 
 def test_invalid_pdf_cloud_disabled_and_cross_origin(tmp_path, monkeypatch):
@@ -262,7 +228,13 @@ def test_invalid_pdf_cloud_disabled_and_cross_origin(tmp_path, monkeypatch):
             headers={"Content-Type": "application/pdf"},
         )
         document_id = response.json()["id"]
-        assert client.post(f"/documents/{document_id}/reviews?use_agent=true").status_code == 503
+        assert (
+            client.post(
+                f"/documents/{document_id}/generations",
+                json={"equipment_id": "equipment-1", "expected_version": 1, "use_agents": True},
+            ).status_code
+            == 503
+        )
         denied = client.get("/health", headers={"Origin": "https://external.example"})
         assert denied.status_code == 403
         assert client.get("/documents/not-a-uuid").status_code == 422
@@ -311,12 +283,35 @@ def test_select_directly_from_drawing_without_entering_tag(tmp_path):
         )
 
 
-async def test_real_microsoft_agent_sdk_with_mocked_model(document):
+async def test_real_microsoft_agent_sdk_with_mocked_model():
+    from test_reconstruction import source_document
+
+    from pid_framework.models import BoundaryRequest
+    from pid_framework.reconstruction import propose_reconstruction
+
+    source, document = source_document()
+    drawing = propose_reconstruction(
+        document,
+        source,
+        BoundaryRequest(equipment_id="vessel", expected_version=1),
+        automatic=True,
+    )
+    evidence = [document.evidence[-1]]
+    outputs = [
+        {"evidence_ids": [evidence[0].id]},
+        {"positions": [{"node_id": n.id, "position": n.position} for n in drawing.nodes]},
+        {
+            "items": [
+                {"evidence_id": evidence[0].id, "explanation": "Selected vessel source region."}
+            ]
+        },
+    ]
     calls = []
 
     def completion(request: httpx.Request) -> httpx.Response:
         import json
 
+        content = json.dumps(outputs[len(calls)])
         calls.append(json.loads(request.content))
         return httpx.Response(
             200,
@@ -328,7 +323,7 @@ async def test_real_microsoft_agent_sdk_with_mocked_model(document):
                 "choices": [
                     {
                         "index": 0,
-                        "message": {"role": "assistant", "content": '{"findings":[]}'},
+                        "message": {"role": "assistant", "content": content},
                         "finish_reason": "stop",
                     }
                 ],
@@ -338,6 +333,10 @@ async def test_real_microsoft_agent_sdk_with_mocked_model(document):
     async with httpx.AsyncClient(transport=httpx.MockTransport(completion)) as http:
         async with AsyncOpenAI(api_key="offline-placeholder", http_client=http) as sdk:
             client = OpenAIChatCompletionClient(model="offline", async_client=sdk)
-            findings = await AgentFrameworkReviewer(Agent(client=client)).review(document)
-    assert findings == []
-    assert calls[0]["response_format"]["type"] == "json_schema"
+            agents = GenerationAgents(*(Agent(client=client) for _ in range(3)))
+            planned, context, explanation = await agents.run("V-101", evidence, drawing)
+    assert len(calls) == 3
+    assert planned.connections == drawing.connections
+    assert context == evidence
+    assert explanation.items[0].evidence_id == evidence[0].id
+    assert all(call["response_format"]["type"] == "json_schema" for call in calls)

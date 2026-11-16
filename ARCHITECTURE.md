@@ -1,303 +1,293 @@
-# Custom engineering drawing framework: design and implementation specification
+# Equipment P&ID Generator: current architecture
+
+This document describes the **implemented connected-system generator**, not the earlier
+review/correction design. For operation, see the [user guide](./USER_GUIDE.md); for a quick
+start, see [README](./README.md).
 
 ## 1. Scope and responsibility
 
-Build a traceable platform for reviewing engineering drawings, initially pump-related
-P&IDs, and authoring equipment-focused detailed drawing packages.
+The application accepts a P&ID PDF, lets an engineer select an actual equipment symbol,
+and generates a newly laid-out draft of its traceable connected system on that source page.
+It preserves supported original symbols/lettering, reroutes piping, and explains source
+context, boundaries, and uncertainty.
 
-Two operating modes share one evidence-linked engineering model:
+It does not modify the upload, recommend drawing corrections, perform technical compliance
+review, or expose a drawing-model editor. Cropped-page and generic-sketch exports are not
+active API/UI workflows. It does not certify completeness, safety, or engineering correctness.
 
-1. **Review:** identify potential issues, distinguish uncertainty from defects, and produce
-   actionable comments with source revision and precise locations.
-2. **Equipment detailing:** select depicted equipment, resolve package boundaries,
-   gather specifications, produce an editable draft, and obtain discipline approval.
-
-Neither a vision model nor agreement between agents establishes engineering correctness.
-The owner must define project-specific acceptance criteria and applicable design requirements.
-
-## 2. Logical architecture
+## 2. Component map
 
 ```text
-Browser drawing workspace / engineering authoring-tool plugin
-                        |
-API + identity + project permissions + approval policy
-                        |
-Durable review/detailing workflow + immutable state snapshots
-                        |
-   +--------------------+-------------------------+
-   |                    |                         |
-Ingestion          Review services          Detailing services
-   |                    |                         |
-CAD/PDF parsing    Applicability resolver    Equipment/package selector
-OCR/vision         Deterministic rules      Cross-sheet context resolver
-Symbol detection   Specialist agents        Specification reconciliation
-Line tracing       Evidence verifier        Proposed-change planner
-Graph validation   Finding consolidation    Deterministic CAD renderer
-   |                    |                         |
-   +--------------------+-------------------------+
-                        |
-Engineering graph + evidence index + document/revision registry
-                        |
-Original documents / standards / datasheets / audit event ledger
+Browser: PDF upload -> source viewer -> equipment selection -> Generate
+                              |
+                       FastAPI, loopback only
+                              |
+             Source PDF + document/evidence records
+                              |
+           Deterministic same-page vector network tracing
+                              |
+          Connected drawing model + source-text evidence
+                              |
+             +----------------+----------------+
+             |                                 |
+       Local generation                 Optional Azure agents
+       initial layout                 Evidence -> Layout -> Explanation
+             |                                 |
+             +----------------+----------------+
+                              |
+           Layout / reference / native-object validation
+                              |
+             New vector sheet + explanation-page rendering
+                              |
+                 Save generation model after rendering succeeds
+                              |
+               Preview PNG / PDF download / JSON details
 ```
 
-Keep the document interpretation graph distinct from the workflow execution graph.
-The former describes plant facts; the latter describes processing and approval state.
+Local parsing, graph construction, drawing composition, and storage are custom application
+code. Microsoft Agent Framework supplies the optional bounded model interactions.
 
-## 3. Baseline choice
+### Main modules
 
-Use **Microsoft Agent Framework** for bounded model/tool interactions on Azure.
-The prototype implements the real SDK's `Agent` and schema-constrained responses.
-It deliberately uses ordinary Python orchestration for the small initial workflow.
-It does not claim distributed durability or production workflow checkpointing.
-
-For production, implement Microsoft Agent Framework workflows with explicit typed stages,
-checkpoint storage, bounded retries, cancellation and human approval. Pin SDK versions
-and test migration behavior before upgrading. Keep extraction, graph, rules, and rendering
-behind ordinary service interfaces so a later LangGraph adapter does not change semantics.
-Do not introduce a second orchestrator merely to coordinate the first.
-
-## 4. Canonical engineering data model
-
-Production entities:
-
-- Project, document, revision, page, coordinate transformation and source checksum.
-- Equipment and equipment ports/nozzles.
-- Pipe segments, fittings, valves, instruments and signal interfaces.
-- Connections with endpoints, connection type, direction when known and source evidence.
-- Off-page connectors and references to other drawings.
-- Instrument loops and control/protective function references.
-- Specifications with units, design/operating context, provenance and source precedence.
-- Requirements with edition, clause, applicability and licensed source reference.
-- Findings, review decisions, proposed changes and formal approval events.
-
-Each claim requires a source location or a reproducible calculation with cited inputs.
-Track provenance states separately: observed, inferred, engineer-confirmed, proposed,
-approved, rejected and superseded. Do not equate engineer confirmation of extraction
-with formal approval of the design.
-
-The prototype stores a smaller equipment/connection graph as validated JSON in SQLite.
-This intentionally omits ports, separate signal topology, semantic unit reconciliation,
-and automated document association. Production graph traversal must operate at port level.
-
-Coordinate convention: one-based page number and normalized top-left bounding box
-`[left, top, right, bottom]`. Retain transforms for source CAD, PDF rotation/crop,
-rasterization and tiled inference before supporting those input variations.
-
-## 5. Drawing interpretation
-
-Prefer intelligent CAD exports where available. For PDFs:
-
-1. Classify page type and establish readable text/vector/image layers.
-2. Extract text and geometry while preserving stable source coordinates.
-3. Retrieve the applicable project symbol legend.
-4. Detect symbols and their ports at suitable image resolution.
-5. Trace process and instrument lines; distinguish intersections from junctions.
-6. Associate labels, notes, line numbers and specifications with entities.
-7. Resolve cross-sheet connectors using the drawing register and revisions.
-8. Validate graph consistency and send uncertain regions to engineer correction.
-
-Use tile overlap and page-level context to avoid truncating long lines or missing
-small annotations. Propagate confidence per claim and connection, not just per document.
-Do not report a missing connection based solely on a low-confidence extraction.
-
-Image-only drawings need OCR and a separate visual extraction evaluation set.
-General document OCR is not a substitute for symbol and topology recognition.
-
-## 6. Review workflow and agents
-
-```text
-Register immutable inputs
- -> extraction and graph validation
- -> extraction correction checkpoint
- -> determine applicable requirements
- -> parallel deterministic and bounded specialist checks
- -> verify evidence and requirement applicability
- -> deduplicate without losing distinct drawing locations
- -> engineer disposition
- -> publish versioned comments
-```
-
-Agents have narrow contracts:
-
-| Agent/service | Input | Output | Mandatory guard |
-|---|---|---|---|
-| Drawing interpreter | Source regions, legend | Candidate entities/relations | No invented connections |
-| Requirement resolver | Project metadata, approved standards | Applicable requirement references | Edition and scope verified |
-| Piping reviewer | Confirmed topology, line list, rules | Potential issues/queries | Cite topology and rule |
-| Instrument reviewer | Signals, index, control narrative | Loop/control discrepancies | No assumed protective function |
-| Process reviewer | P&ID, datasheets, design basis | Contextual discrepancies | Calculations use approved tools |
-| Evidence verifier | Findings and cited regions | Valid/rejected/needs-verification | Existence is not semantic support |
-| Comment author | Verified observations | Concise location-linked comments | Separate fact, implication and action |
-
-Deterministic rules should handle unique identifiers, reference integrity, explicit
-attribute constraints, document consistency and machine-readable project requirements.
-Contextual rules for drains, vents, isolation, bypasses, relief, and permissives require
-project design context; they must not be universal assumptions.
-
-Production comment contract:
-
-- Finding ID, run ID and project ID.
-- Drawing ID/revision, model snapshot and precise region(s).
-- Equipment, port, line and instrument IDs as applicable.
-- Observation, potential consequence, requested action and category.
-- Requirement reference and applicability rationale.
-- Supporting evidence, extraction uncertainty and limitations.
-- Discipline, priority and rationale.
-- Engineer disposition, reviewer identity, timestamps and supersession link.
-
-The prototype implements only repeat-tag queries, documented-HOLD queries, submitted
-specification conflicts, and optional evidence-cited agent review. It does not evaluate
-an engineering standard or infer that a HOLD is an unresolved defect.
-
-## 7. Equipment-specific detailed drawing workflow
-
-1. Select the equipment on the source drawing; distinguish symbols from references.
-2. Confirm identity, ports and connected topology.
-3. Select boundaries using ports, isolation points and off-page connectors.
-4. Retrieve equipment datasheets, line/valve lists, instrument index, control narrative,
-   cause-and-effect documents, approved vendor drawings and project requirements.
-5. Reconcile conflicting values using explicit project source precedence.
-6. Build a specification matrix: established, conflicting, not applicable or missing.
-7. Create a draft drawing model with source-derived geometry and approved symbol definitions.
-8. If design proposals are allowed, create a **separate proposed-change set** with
-   rationale, dependencies, required calculations and approval gates.
-9. Render the source-backed draft and proposed overlay separately.
-10. Validate topology and annotation fidelity, then require discipline approval.
-
-Never silently convert a proposed value into a source fact. Do not invent dimensions,
-ratings, materials, fail positions, flow directions, nozzle schedules or protective logic.
-Critical design calculations must run through validated engineering tools and be reviewed
-by qualified personnel.
-
-The primary prototype authoring path now creates a newly composed PDF from a corrected
-source-object model. Separate legacy paths provide source crops and generic SVG/PDF/JSON
-detail sheets. None establishes a complete, standards-compliant P&ID automatically.
-Native editable engineering output still requires selecting the target authoring tool
-and implementing its symbol/attribute/connection API.
-
-### Implemented source-object reconstruction and correction
-
-The equipment type is open text, not a pump-only enumeration. Named package/tag discovery
-is a navigation aid, while visual region selection identifies arbitrary depicted equipment.
-The user must select its actual symbol or package outline rather than an off-sheet label.
-
-The reconstruction model holds source symbol/lettering regions, independently chosen
-destination positions, node ports, explicit connections and source stroke references.
-Stroke-only compound paths are split into their original subpaths to separate unrelated
-source lines. Native glyph/path objects are then relocated; new orthogonal connections
-use source color, stroke width, dash, cap and join settings. Source template/notes regions
-are reused separately. The output is a new sheet, not a complete network crop.
-
-The automatic proposal handles horizontal vector crossings and nearby source lettering.
-It does not claim semantic extraction of all branches, signals, valves or remote notes.
-For the supplied HPU outline, the initial proposal finds six right-side interfaces;
-left-side signal/drain details and other context still need engineer correction.
-Supplier-defined package internals remain unknown.
-
-The correction workspace supports source-symbol/annotation additions, element positioning
-and deletion, editable connection/port data, and an original-object/stroke index. An
-explicitly unconfirmed preview precedes user confirmation. Final snapshots are immutable,
-source-checksummed and visibly marked not for construction. Removing the selected
-equipment symbol, overlapping source assignments, unknown nodes, invalid stroke evidence,
-unsupported grouped forms and stale document versions fail explicitly rather than
-returning a crop or generic replacement symbol as a successful reconstruction.
-
-Native same-sheet vector authoring is the current supported case. Scans, nested forms,
-arbitrary filled compounds and robust automatic layout/semantic topology remain perception
-and rendering work, not solved capabilities. Engineer confirmation is not a substitute
-for an extraction benchmark or a formal engineering approval workflow.
-
-### Implemented original-fidelity crop workflow
-
-For the selected PDF-only requirement, a separate export path now preserves the original
-page content instead of creating a generic diagram. Local connected-component image
-processing proposes a boundary from line-bearing ink near confirmed equipment.
-The engineer adjusts it, adds detached notes/specification crops, and confirms completeness.
-PDF page boxes are changed using `pypdf`; original content streams, fonts and graphics
-are retained without rasterization or rescaling. Each confirmed region becomes one page.
-
-The source checksum, revision, graph version, exact region list and bounded extracted
-text are persisted in an immutable provenance record. Live source checksums are validated
-on export. No new engineering details are generated or inferred.
-
-This is geometric line following, not a port-level semantic graph: crossings, dashed
-signals, scan quality, detached symbols and remote notes remain limitations. The workflow
-does not claim automatically complete equipment context. Source crop fidelity and
-context-selection completeness are separate acceptance questions. Cropping is not redaction.
-
-## 8. Azure production mapping
-
-| Concern | Candidate service |
+| Module | Responsibility |
 |---|---|
-| API/workers | Azure Container Apps or an approved equivalent |
-| Originals and derived artifacts | Azure Blob Storage with versioning and retention |
-| Jobs | Service Bus plus idempotent workflow workers |
-| Metadata/audit | Azure Database for PostgreSQL |
-| Engineering graph | PostgreSQL graph tables initially; graph service only if justified |
-| Reference retrieval | Azure AI Search with document/page/edition filters |
-| OCR | Azure AI Document Intelligence, validated for the actual drawing set |
-| Vision reasoning | Approved Azure model deployment with appropriate image support |
-| Agent execution | Microsoft Agent Framework |
-| Identity | Microsoft Entra ID and project-scoped authorization |
-| Secrets | Managed identity and Key Vault |
-| Monitoring | OpenTelemetry / Azure Monitor with source-content redaction |
+| [api.py](./src/pid_framework/api.py) | Upload, selection, generation, reads/downloads, HTTP validation and local-request policy |
+| [web/index.html](./src/pid_framework/web/index.html), [web/app.js](./src/pid_framework/web/app.js) | Three-step UI, source navigation, pointer selection, preview, output explanations |
+| [pdf.py](./src/pid_framework/pdf.py) | Positioned text/tag candidate extraction, source-page rendering, shared PDFium lock |
+| [connected.py](./src/pid_framework/connected.py) | Supporting-symbol candidates, line graph, same-page traversal, boundaries, expanded layout |
+| [generation.py](./src/pid_framework/generation.py) | Generation orchestration, bounded source text, optional agents, output explanation and combined PDF |
+| [agents.py](./src/pid_framework/agents.py) | Azure settings/authentication, three SDK agents, evidence/layout response validation |
+| [reconstruction.py](./src/pid_framework/reconstruction.py) | Shared native-object isolation, source checks, symbol relocation, source-style connection rendering |
+| [models.py](./src/pid_framework/models.py) | Typed document, evidence, drawing, generation, and agent contracts |
+| [store.py](./src/pid_framework/store.py) | Local SQLite records, document version updates, checksum-based source files |
+| [__main__.py](./src/pid_framework/__main__.py) | Local server and PDF-import CLI |
 
-All Azure services are a proposed deployment architecture, not provisioned resources.
-Use approved regions, private networking, data retention rules and access controls.
-Do not log full drawings or model prompts by default.
+Legacy helpers in the repository are not evidence of an exposed review, crop, or editing
+feature. The route definitions and browser workflow determine the active application surface.
 
-## 9. Reliability and trust boundaries
+## 3. Upload and selection
 
-- Treat all document text, retrieved passages and model outputs as untrusted data.
-- Enforce schema, identity, source revision and evidence relationships in code.
-- Hash immutable sources; record parser, model, prompt, rule and legend versions per run.
-- Use atomic artifact writes, idempotency keys and transactional publication.
-- Checkpoint after extraction, corrected graph, review and package composition.
-- Explicitly fail or mark a stage incomplete; never publish an empty successful result
-  when a model/tool operation actually failed.
-- Limit agent tool privileges and bounded loops; never let a drawing instruction
-  authorize a tool call or change an engineering policy.
-- Require project authorization and formal role-separated approval before release.
+1. The browser sends raw PDF bytes, not a multipart form, with a filename.
+2. The API checks the `.pdf` extension, `application/pdf` content type, PDF header, and
+   32 MiB size limit. Extraction accepts at most 50 pages and 200,000 text characters per page.
+3. Positioned text matching builds a candidate equipment/label index and source evidence.
+   This is not complete equipment recognition; an index can be empty on a usable vector page.
+4. Source bytes are stored by SHA256 and a `Document` is saved.
+5. The user selects a source rectangle around the actual equipment. A label choice alone
+   does not establish a symbol outline.
+6. A selection records `engineer_selection` evidence, adds or updates an equipment record,
+   and advances the document version. It does not approve the design.
 
-The local prototype has no production identity boundary. Bind to loopback only.
-It rejects cross-origin browser requests and validates source references, but this
-is not a substitute for an authenticated deployment.
+An unambiguous indexed label inside a new selection can supply its display tag. Otherwise,
+the system uses an explicit page/selection-based name rather than inventing an equipment tag.
+When updating an existing equipment selection, the latest outline supersedes earlier
+outline references for that equipment.
 
-## 10. Evaluation and release gates
+The browser supports direct new selection or guided outline capture after choosing an
+indexed label. It exposes no graph/specification correction forms.
 
-Build a permissioned gold set with independent engineer annotations, including negative
-examples and common drawing conventions. Split by project/drawing family, not random crops.
+## 4. Connected-system tracing
 
-Measure:
+### 4.1 Source-object preparation
 
-- Symbol/tag precision and recall by class and scan quality.
-- Port/connection precision and recall; crossing-versus-junction error rate.
-- Off-page reference resolution accuracy.
-- Specification extraction with units/context and source support.
-- Finding precision, known-issue recall, unsupported-claim rate and location accuracy.
-- Coverage by rule and applicable evidence, including abstentions.
-- Generated graph-to-source fidelity, label preservation and missing-information disclosure.
-- Engineer correction time, accepted/rejected comment rates, latency and cost.
+- Use native top-level PDF objects from the selected source page.
+- Split compound stroke-only paths into subpaths so independent pipes are not one
+  indivisible source object. Extraction and rendering use the same deterministic splitting.
+- Use the selected equipment outline as the traversal seed.
+- Identify other closed or filled path objects as supporting-symbol candidates. Touching
+  candidates can be grouped, for example the two halves of a valve.
+- Associate enclosed native objects and nearby text with candidate symbols.
+- Recognize some continuation symbols using nearby text patterns such as `TO DWG`,
+  `FROM SHEET`, `OFF PAGE`, or `CONTINUED ON`.
 
-Select quantitative thresholds with the responsible engineering organization before
-deployment. A demonstration on one sheet cannot establish these rates. All claims in
-released packages need traceability; any critical unsupported addition blocks release.
-No autonomous construction approval is an acceptable benchmark shortcut.
+These are geometric heuristics, not an equipment classifier or a learned symbol recognizer.
+Closed piping loops or unrecognized glyphs can be misclassified. Package internals are
+reused only when present in the selected/native source content; absent internals are unknown.
 
-## 11. Implementation stages and acceptance
+### 4.2 Line graph
 
-1. **Local foundation (implemented):** readable-PDF import; source overlays; manual
-   source-linked graph/specification correction; narrow structured review; offline
-   SDK contract test; equipment package SVG/PDF/JSON; local persistence.
-2. **Perception pilot:** approved symbol legend, OCR, symbol/port detection, line tracing,
-   and engineer correction tools; pass a separately agreed annotated drawing benchmark.
-3. **Engineering context:** reference-document ingestion, units/source precedence,
-   standards applicability, port-level graph, cross-sheet navigation and validated rules.
-4. **Authoring integration:** select CAD platform; implement native symbol placement,
-   ports, line classes, editable labels, deterministic layout, and topology validation.
-5. **Production governance:** Entra permissions, durable jobs, audit ledger, comment
-   disposition, signed approvals, data lifecycle controls and operational evaluation.
+Open stroked straight segments provide candidate pipeline/signal linework. Horizontal,
+vertical, diagonal, and bent paths are supported. Open curved paths are not traced.
 
-Stages 2-5 require representative authorized drawings, legends, supporting documents,
-engineering reviewers and selection of the target authoring environment.
+The tracer:
+
+1. Splits linework at symbol-region boundaries and endpoint contacts.
+2. Detects endpoint-to-segment contacts, including T-junctions, within 0.8 PDF points.
+3. Creates symbol and junction nodes with source object/segment references.
+4. Builds adjacency and traverses reachable connections from the selected equipment.
+5. Stops traversal through recognized continuation-boundary nodes.
+6. Discards unreached symbols and linework.
+
+An interior-only crossing, without endpoint contact or an intervening recognized symbol,
+does not create a junction. This convention reduces accidental inclusion of unrelated
+systems but does not resolve every engineering drawing's crossing/junction conventions.
+Connection traversal is not a verified upstream/downstream or flow-direction analysis.
+
+### 4.3 Boundaries and annotations
+
+Reached continuation symbols and terminal unresolved junctions receive `B1`, `B2`, etc.
+Their descriptions explain whether the marker is a recognized continuation or an unresolved
+source line end. No other page is traversed, even if a destination drawing is named.
+
+Text inside retained symbol regions and lettering near retained segments are included
+where supported. Connection source endpoints bound the retained segment context, rather
+than treating an entire original path as relevant after a continuation boundary.
+Proximity is not proof that a note/specification applies to a particular equipment item.
+
+## 5. Layout and drawing composition
+
+The initial layout expands source-relative node-center spacing by a factor of 1.7. It
+retains original glyph scale and grows the destination sheet as needed. This is a
+deterministic spatial expansion, not an optimal graph-layout or collision-free routing engine.
+
+The renderer:
+
+- Relocates assigned native source objects individually using PDF transformation matrices.
+- Does not substitute a rectangular source-page crop or screenshot.
+- Creates new orthogonal connections between retained node ports.
+- Reuses cited source stroke color, width, dash pattern, line cap, and line join.
+- Labels system boundaries and places a visible draft/not-for-construction banner.
+- Produces a newly sized PDF sheet; source template/title-block regions are not automatically
+  carried into this connected-system workflow.
+
+Layout validation checks node identity, bounds, and overlapping node extents. Native
+rendering validates source checksum/dimensions, selected-symbol retention, source-object
+assignments, and connection style references. These checks do not prove semantic port
+identification, line/label clearance, topology fidelity, or process correctness.
+
+A combined PDF contains the drawing first, followed by explanation pages with source
+references, reading guidance, boundary descriptions, generation mode, and limitations.
+The browser preview is a raster overview of this generated vector sheet, not the method
+used to construct the downloaded drawing.
+
+## 6. Optional Microsoft Agent Framework pipeline
+
+The application uses actual Microsoft Agent Framework `Agent` objects and typed responses.
+Sequential Python calls orchestrate the workflow; there is no LangGraph runtime,
+autonomous tool loop, distributed workflow checkpointing, or registered Foundry hosted agent.
+
+| Stage | Receives | Returns | Enforced checks |
+|---|---|---|---|
+| `SourceEvidenceAgent` | Equipment name and bounded source evidence | `EvidenceContext` | Existing IDs only, no duplicate IDs |
+| `DrawingLayoutAgent` | Existing connected drawing model, source/destination sizes | `DrawingLayout` | Exactly one position for each existing node, in-bounds extents, no node overlaps |
+| `DrawingExplanationAgent` | Equipment name and evidence selected by stage 1 | `GenerationExplanation` | Explanation citations belong to that selected evidence context |
+
+The layout agent cannot change geometry, ports, edges, specifications, or source references:
+its output contract permits only existing node IDs and positions. The explanation agent
+does not determine the network. All deterministic source evidence remains in the output
+even when the evidence agent selects a narrower explanation context.
+
+Instructions prohibit invented specifications, corrections, approval claims, and treating
+source strings as instructions. These instructions and valid citations do not establish
+semantic truth; AI explanations remain explicitly unverified.
+
+All agents share one `OpenAIChatCompletionClient` configured with `PID_AZURE_DEPLOYMENT`.
+No model name is hardcoded. `DefaultAzureCredential` supplies Azure authentication.
+See [Azure activation](./AZURE_DEPLOYMENT.md) for endpoint and deployment prerequisites.
+
+Model calls require both enabled/configured settings and per-generation user opt-in.
+Structured source records, not original PDF images, are sent; those records can still be
+confidential. Model/schema/reference failures abort the operation without silently
+substituting local success. The user can explicitly choose local mode for a separate attempt.
+
+## 7. Data contracts and persistence
+
+Coordinates use one-based page numbers and normalized top-left rectangles
+`[left, top, right, bottom]`. Source and destination page sizes are PDF points.
+
+| Contract | Main contents |
+|---|---|
+| `Document` | ID, filename, revision, checksum, pages, evidence, equipment/connection records, version, limitations |
+| `Evidence` | ID, page/rectangle, source text or selection description, origin |
+| `DrawingNode` | Source region, label/kind, destination position, optional explicit source object IDs |
+| `DrawingConnection` | Node/port references, source object/style evidence, optional source segment endpoints |
+| `ReconstructionModel` | Connected nodes/edges, source/destination sizes, warnings; internal name retained for compatibility |
+| `GeneratedDrawing` | Document/version, selected equipment, drawing snapshot, source evidence, explanations, agent names/deployment |
+
+Generation keeps `engineer_confirmed=false` and uses status
+`generated_draft_not_for_construction`. A successful generation is not design approval.
+
+Local storage:
+
+- `data/<SHA256>.pdf`: source bytes, checked against the document checksum.
+- `data/framework.sqlite3`: JSON payloads in the `records` table; active kinds include
+  `document` and `generation`.
+- Document selection updates use transactions and expected-version checks.
+- Generation performs a render before saving its result, so a failed native render does
+  not publish a successful generation record.
+
+Saved drawing models and source provenance are snapshots. PDF and preview downloads are
+rendered again from the saved model/source; PDF bytes are not archived as an immutable
+signed deliverable. Parser/prompt versions and a formal approval audit ledger are not
+currently recorded as a production governance system.
+
+Data persists across server restarts and browser refreshes. There is no stored-document
+chooser or user-facing delete/retention manager; an upload screen does not imply empty storage.
+
+## 8. Active API
+
+| Method and route | Purpose |
+|---|---|
+| `GET /`, `GET /app.js` | Browser interface |
+| `GET /health` | Local readiness/configuration flags; not a live Azure inference test |
+| `POST /documents?filename=<name>.pdf&revision=<optional>` | Raw PDF upload; revision defaults to `UNVERIFIED` |
+| `GET /documents`, `GET /documents/{id}` | Saved document metadata |
+| `GET /documents/{id}/source` | Original PDF |
+| `GET /documents/{id}/pages/{page}.png` | Original-page viewing image |
+| `POST /documents/{id}/selections` | Source outline and current expected version; optional existing equipment ID |
+| `POST /documents/{id}/generations` | Selected equipment ID, expected version, optional `use_agents` |
+| `GET /generations/{id}` | Saved generation JSON |
+| `GET /generations/{id}/drawing.pdf` | Drawing plus explanation PDF |
+| `GET /generations/{id}/preview.png` | Generated drawing overview |
+
+Review, graph-update, proposal/editor-preview, crop-export, and generic-package routes are
+not exposed. Typical errors are 404 for absent records, 409 for stale versions, 413 for
+oversized uploads, 415 for unsupported upload format, 422 for invalid/unsupported drawing
+data, and 503 for explicitly requested but disabled/incomplete Azure configuration.
+Unexpected failures return a generic 500 response and are logged by the local server.
+
+## 9. Reliability, limits, and trust boundaries
+
+PDFium calls share a process-local reentrant lock because the library is not thread-safe.
+This is not a distributed lock or production background-job queue.
+
+| Limit | Current value |
+|---|---|
+| Upload bytes / pages | 32 MiB / 50 |
+| Text characters per page | 200,000 |
+| Objects / candidate symbols / straight segments per traced page | 20,000 / 1,000 / 6,000 |
+| Output nodes / connections | 500 / 1,000 |
+| Sheet dimensions | 1 to 14,400 points per dimension |
+
+Exceeding limits fails explicitly. No silent truncation is used to claim a complete system.
+Image-only drawings, grouped forms, rotated pages, and nonzero source origins are not
+supported for this native-object workflow. Open curves, gaps, ambiguous symbols/junction
+conventions, and detached context remain coverage limits. A source with no supported
+connections can yield an explicitly incomplete symbol-only draft.
+
+The server binds to loopback, restricts trusted hosts, rejects cross-origin browser
+requests, and sets no-store/CSP/content-type protection headers. These controls are not
+authentication, document authorization, a hardened PDF sandbox, or a production security boundary.
+Originals, records, exports, and extracted model inputs must be handled under the owner's
+confidentiality policy.
+
+## 10. Validation and deployment status
+
+Existing automated tests cover upload/selection/version behavior, typed agent handoffs
+with mocked model responses through the SDK, invalid citations/layouts, failure handling,
+source fidelity, and native PDF rendering. Connected-system cases include a multi-hop
+pump/valve/vessel network, a vertical instrument branch, excluded disconnected crossings,
+off-page stopping, expanded sheets, and retained source lettering/glyph scale.
+
+Synthetic regression tests are not a representative engineering accuracy benchmark.
+They do not establish symbol recall, complete topology recovery, or compliance coverage.
+Live Azure model behavior requires separate authorized synthetic smoke testing.
+
+The complete application is not deployed to Foundry/Azure. Private cloud hosting would need
+approved application ingress, Entra authentication/authorization, durable private storage
+and database services, managed identity, private AI connectivity, and operational controls.
+Foundry AI hosting does not automatically host the browser/PDF application.
+
+See [private deployment prerequisites](./AZURE_DEPLOYMENT.md). OCR, semantic symbol/port
+recognition, verified cross-sheet traversal, standards reasoning, native CAD authoring, and
+formal approval workflows are **not implemented capabilities** of this version.

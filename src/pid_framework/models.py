@@ -215,6 +215,7 @@ class DrawingNode(Contract):
     region: Location
     position: tuple[Score, Score]
     text_only: bool = False
+    source_object_ids: list[int] | None = None
 
 
 class DrawingConnection(Contract):
@@ -226,17 +227,33 @@ class DrawingConnection(Contract):
     source_region: Location
     source_object_id: int = Field(ge=0)
     description: Text
+    source_points: tuple[tuple[Score, Score], tuple[Score, Score]] | None = None
 
 
 class ReconstructionModel(Contract):
     page: int = Field(ge=1)
-    nodes: list[DrawingNode] = Field(min_length=1, max_length=100)
-    connections: list[DrawingConnection] = Field(default_factory=list, max_length=200)
+    nodes: list[DrawingNode] = Field(min_length=1, max_length=500)
+    connections: list[DrawingConnection] = Field(default_factory=list, max_length=1000)
     template_regions: list[Location] = Field(default_factory=list, max_length=10)
     warnings: list[str]
+    source_size: tuple[float, float] | None = None
+    sheet_size: tuple[float, float] | None = None
+
+    def node_size(self, node: DrawingNode) -> tuple[float, float]:
+        sx, sy = self.source_size or (1, 1)
+        dx, dy = self.sheet_size or (sx, sy)
+        return (
+            (node.region.bbox[2] - node.region.bbox[0]) * sx / dx,
+            (node.region.bbox[3] - node.region.bbox[1]) * sy / dy,
+        )
 
     @model_validator(mode="after")
     def valid_connections(self) -> Self:
+        if (self.source_size is None) != (self.sheet_size is None):
+            raise ValueError("Source and destination sheet sizes must be specified together")
+        for size in (self.source_size, self.sheet_size):
+            if size is not None and any(not 1 <= value <= 14400 for value in size):
+                raise ValueError("Sheet dimensions must be finite and between 1 and 14400 points")
         ids = [node.id for node in self.nodes]
         if len(set(ids)) != len(ids):
             raise ValueError("Drawing node IDs must be unique")
@@ -268,4 +285,48 @@ class ReconstructedDrawing(Contract):
     equipment_id: Text
     drawing: ReconstructionModel
     engineer_confirmed: bool
-    status: Literal["reconstructed_draft_not_for_construction", "unconfirmed_preview"]
+    status: Literal[
+        "reconstructed_draft_not_for_construction",
+        "unconfirmed_preview",
+        "generated_draft_not_for_construction",
+    ]
+
+
+class GenerationRequest(BoundaryRequest):
+    use_agents: bool = False
+
+
+class EvidenceContext(Contract):
+    evidence_ids: list[Text] = Field(min_length=1, max_length=100)
+
+
+class NodePosition(Contract):
+    node_id: Text
+    position: tuple[Score, Score]
+
+
+class DrawingLayout(Contract):
+    positions: list[NodePosition] = Field(min_length=1, max_length=500)
+
+
+class ExplainedEvidence(Contract):
+    evidence_id: Text
+    explanation: Text
+
+
+class GenerationExplanation(Contract):
+    items: list[ExplainedEvidence] = Field(max_length=100)
+
+
+class GeneratedDrawing(Contract):
+    id: Text
+    document_id: Text
+    document_version: int
+    equipment_tag: Text
+    reconstruction: ReconstructedDrawing
+    summary: Text
+    limitations: list[Text]
+    source_evidence: list[Evidence]
+    agent_explanation: GenerationExplanation | None = None
+    agents_used: list[Text] = Field(default_factory=list)
+    model_deployment: str | None = None

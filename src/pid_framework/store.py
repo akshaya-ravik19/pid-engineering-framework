@@ -5,7 +5,14 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from pid_framework.models import Document, OriginalExtract, Package, ReconstructedDrawing, Review
+from pid_framework.models import (
+    Document,
+    GeneratedDrawing,
+    OriginalExtract,
+    Package,
+    ReconstructedDrawing,
+    Review,
+)
 
 
 class ConflictError(ValueError):
@@ -32,7 +39,14 @@ class Store:
             connection.close()
 
     def save(
-        self, kind: str, value: Document | Review | Package | OriginalExtract | ReconstructedDrawing
+        self,
+        kind: str,
+        value: Document
+        | Review
+        | Package
+        | OriginalExtract
+        | ReconstructedDrawing
+        | GeneratedDrawing,
     ) -> None:
         with self.connect() as db:
             db.execute(

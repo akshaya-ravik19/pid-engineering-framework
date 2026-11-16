@@ -142,7 +142,7 @@ def isolate_stroked_subpaths(page: pdfium.PdfPage) -> None:
 
 
 def propose_reconstruction(
-    document: Document, source: bytes, request: BoundaryRequest
+    document: Document, source: bytes, request: BoundaryRequest, *, automatic: bool = False
 ) -> ReconstructionModel:
     equipment = selected_equipment(document, request)
     evidence = [e for e in document.evidence if e.id in equipment.evidence_ids]
@@ -156,7 +156,7 @@ def propose_reconstruction(
     symbol_width, symbol_height = x2 - x1, y2 - y1
     if symbol_width > 0.35 or symbol_height > 0.65:
         raise ValueError("Select the equipment outline, not the complete drawing/network")
-    central_x = 0.30
+    central_x = 0.32 if automatic else 0.30
     nodes = [
         DrawingNode(
             id="selected-equipment",
@@ -211,7 +211,7 @@ def propose_reconstruction(
                         seen.add(key)
                         external_x = low if side == "left" else high
                         candidates.append((y, side, external_x, object_id, low, high))
-            if not candidates:
+            if not candidates and not automatic:
                 raise ValueError(
                     "No horizontal vector connections cross this selected outline. "
                     "Adjust the equipment outline or author the reconstruction model manually."
@@ -231,12 +231,12 @@ def propose_reconstruction(
                     ),
                 )
                 width, height = region.bbox[2] - region.bbox[0], region.bbox[3] - region.bbox[1]
-                gap = max(0.18, high - low)
+                gap = 0.22 if automatic else max(0.18, high - low)
                 target_x = (
                     central_x - gap - width if side == "left" else central_x + symbol_width + gap
                 )
                 target_y = 0.24 + region.bbox[1] - y1
-                if target_x < 0 or target_x + width > 0.76 or target_y < 0:
+                if target_x < 0 or target_x + width > 0.96 or target_y < 0:
                     raise ValueError("Proposed symbols do not fit; use a smaller source outline")
                 node_id = f"interface-{index}"
                 nodes.append(
@@ -318,6 +318,24 @@ def propose_reconstruction(
                 )
             else:
                 warnings.append("Title/notes panel not detected; add its source region explicitly.")
+    if automatic:
+        # A new equipment sheet does not inherit unrelated title/notes panels.
+        template = []
+        warnings = [
+            "This is an automatically generated source-supported draft, not design approval.",
+            "Only horizontal vector boundary crossings and nearby line lettering are included.",
+            "Crossings are geometric candidates; process and signal connectivity is not verified.",
+            "Vertical or curved connections, branches, valves, flow arrows and detached notes "
+            "may be absent. No off-sheet references are followed.",
+            "Supplier package internals and specifications absent from the source "
+            "are not invented.",
+            "Completeness, engineering correctness and standards compliance are not established.",
+        ]
+        if not connections:
+            warnings.append(
+                "No supported horizontal interfaces were identified. "
+                "The sheet contains the selected source symbol only; it is not a complete P&ID."
+            )
     return ReconstructionModel(
         page=selection.page,
         nodes=nodes,
@@ -434,19 +452,40 @@ def render_reconstruction(result: ReconstructedDrawing, source: bytes) -> bytes:
             left, bottom, right, top = page.get_bbox()
             if abs(left) > 0.01 or abs(bottom) > 0.01:
                 raise ValueError("Normalize nonzero source page origins before reconstruction")
-            width, height = page.get_size()
+            source_width, source_height = page.get_size()
+            width, height = model.sheet_size or (source_width, source_height)
+            if model.source_size is not None and any(
+                abs(a - b) > 0.01 for a, b in zip(model.source_size, (source_width, source_height))
+            ):
+                raise ValueError("Drawing source dimensions do not match the source PDF")
             objects = list(page.get_objects(max_depth=0))
             boxes = [object_box(obj, page) for obj in objects]
             assigned: dict[int, tuple[float, float]] = {}
             for node in model.nodes:
                 x1, y1, x2, y2 = node.region.bbox
                 nx, ny = node.position
-                if nx + x2 - x1 > 0.98 or ny + y2 - y1 > 0.95:
+                nw, nh = model.node_size(node)
+                if nx + nw > 0.98 or ny + nh > 0.95:
                     raise ValueError(f"Node {node.id} does not fit on the new sheet")
+                if node.source_object_ids == []:
+                    if node.kind not in ("junction", "continuation_boundary"):
+                        raise ValueError("Only traced junctions may omit native source objects")
+                    continue
+                if node.source_object_ids is not None and (
+                    len(set(node.source_object_ids)) != len(node.source_object_ids)
+                    or any(i < 0 or i >= len(objects) for i in node.source_object_ids)
+                ):
+                    raise ValueError(f"Invalid source object selection on {node.id}")
                 moved = []
                 for index, obj in enumerate(objects):
+                    if node.source_object_ids is not None and index not in node.source_object_ids:
+                        continue
                     if node.text_only and obj.type != pdfium.raw.FPDF_PAGEOBJ_TEXT:
                         continue
+                    if node.source_object_ids is not None and not contained(
+                        boxes[index], node.region.bbox
+                    ):
+                        raise ValueError(f"Source object lies outside the region of {node.id}")
                     if contained(boxes[index], node.region.bbox):
                         if obj.type == pdfium.raw.FPDF_PAGEOBJ_FORM:
                             raise ValueError(
@@ -457,7 +496,10 @@ def render_reconstruction(result: ReconstructedDrawing, source: bytes) -> bytes:
                                 f"Overlapping source symbols at {node.id}; "
                                 "separate their regions before confirming"
                             )
-                        assigned[index] = ((nx - x1) * width, (y1 - ny) * height)
+                        assigned[index] = (
+                            nx * width - x1 * source_width,
+                            (1 - ny) * height - (1 - y1) * source_height,
+                        )
                         moved.append(index)
                 if not moved:
                     raise ValueError(f"No complete native PDF objects inside symbol {node.id}")
@@ -488,11 +530,11 @@ def render_reconstruction(result: ReconstructedDrawing, source: bytes) -> bytes:
                     (edge.target, edge.target_port),
                 ):
                     node = nodes[node_id]
-                    x1, y1, x2, y2 = node.region.bbox
+                    nw, nh = model.node_size(node)
                     points.append(
                         (
-                            (node.position[0] + port[0] * (x2 - x1)) * width,
-                            (1 - node.position[1] - port[1] * (y2 - y1)) * height,
+                            (node.position[0] + port[0] * nw) * width,
+                            (1 - node.position[1] - port[1] * nh) * height,
                         )
                     )
                 (sx, sy), (tx, ty) = points
@@ -503,14 +545,29 @@ def render_reconstruction(result: ReconstructedDrawing, source: bytes) -> bytes:
                 path.lineTo(middle, ty)
                 path.lineTo(tx, ty)
                 canvas.drawPath(path)
+            canvas.setFillColorRGB(0.1, 0.2, 0.3)
+            canvas.setFont("Helvetica", 7)
+            for node in model.nodes:
+                if node.kind == "continuation_boundary":
+                    canvas.drawString(
+                        node.position[0] * width + 3,
+                        (1 - node.position[1]) * height + 3,
+                        node.label.split(":", 1)[0],
+                    )
             canvas.showPage()
             canvas.setFillColorRGB(0.65, 0.08, 0.08)
             canvas.setFont("Helvetica", 11)
+            banner = (
+                "EQUIPMENT P&ID DRAFT"
+                if result.status == "generated_draft_not_for_construction"
+                else "RECONSTRUCTED DRAFT"
+                if result.engineer_confirmed
+                else "UNCONFIRMED PREVIEW"
+            )
             canvas.drawString(
                 width * 0.04,
                 height * 0.955,
-                f"{'RECONSTRUCTED DRAFT' if result.engineer_confirmed else 'UNCONFIRMED PREVIEW'}"
-                f" - NOT FOR CONSTRUCTION - SOURCE REV {result.revision}",
+                f"{banner} - NOT FOR CONSTRUCTION - SOURCE REV {result.revision}",
             )
             canvas.save()
             for index, obj in enumerate(objects):
@@ -521,6 +578,9 @@ def render_reconstruction(result: ReconstructedDrawing, source: bytes) -> bytes:
                     page.remove_obj(obj)
                     obj.close()
             page.gen_content()
+            if model.sheet_size:
+                page.set_mediabox(0, 0, width, height)
+                page.set_cropbox(0, 0, width, height)
             with pdfium.PdfDocument.new() as output:
                 output.import_pages(pdf, pages=[model.page - 1])
                 output.save(native_output)

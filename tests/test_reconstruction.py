@@ -178,7 +178,7 @@ def test_overlapping_regions_and_invalid_source_style_do_not_publish(tmp_path):
         render_reconstruction(result, source)
 
 
-def test_api_confirmation_preview_and_persistence(tmp_path):
+def test_api_generation_preview_and_persistence(tmp_path):
     source, document = source_document()
     with TestClient(create_app(tmp_path)) as client:
         doc = client.post(
@@ -197,29 +197,29 @@ def test_api_confirmation_preview_and_persistence(tmp_path):
             },
         ).json()
         equipment_id = doc["graph"]["equipment"][-1]["id"]
-        model = client.post(
-            f"{base}/reconstruction-proposals",
-            json={"equipment_id": equipment_id, "expected_version": 2},
-        ).json()
-        inventory = client.get(f"{base}/source-objects?page=1").json()
-        style = inventory[model["connections"][0]["source_object_id"]]["stroke"]
-        assert style["dash"] == pytest.approx([6, 2])
-        assert client.get(f"{base}/source-objects?page=99").status_code == 422
-        payload = {"equipment_id": equipment_id, "expected_version": 2, "drawing": model}
-        preview = client.post(f"{base}/reconstruction-preview", json=payload)
-        assert preview.status_code == 200, preview.text[:200]
-        assert preview.content.startswith(b"\x89PNG")
-        assert client.post(f"{base}/reconstructions", json=payload).status_code == 422
-        result = client.post(
-            f"{base}/reconstructions", json={**payload, "engineer_confirmed": True}
-        )
+        payload = {"equipment_id": equipment_id, "expected_version": 2}
+        result = client.post(f"{base}/generations", json=payload)
         assert result.status_code == 201, result.text
         record = result.json()
-        response = client.get(f"/reconstructions/{record['id']}/drawing.pdf")
+        assert record["agents_used"] == []
+        assert not record["reconstruction"]["engineer_confirmed"]
+        assert record["reconstruction"]["status"] == "generated_draft_not_for_construction"
+        assert len(record["reconstruction"]["drawing"]["connections"]) == 2
+        assert any("SOURCE SPEC 10 bar" in item["text"] for item in record["source_evidence"])
+        response = client.get(f"/generations/{record['id']}/drawing.pdf")
         assert response.status_code == 200
         assert response.content.startswith(b"%PDF-")
+        parsed = PdfReader(io.BytesIO(response.content))
+        assert len(parsed.pages) >= 2
+        assert float(parsed.pages[0].mediabox.width) == 1000
+        assert not parsed.pages[0].images
+        assert "SOURCE SPEC 10 bar" in parsed.pages[0].extract_text()
+        assert "Coverage and uncertainty" in "".join(p.extract_text() for p in parsed.pages[1:])
+        preview = client.get(f"/generations/{record['id']}/preview.png")
+        assert preview.status_code == 200
+        assert preview.content.startswith(b"\x89PNG")
     with TestClient(create_app(tmp_path)) as client:
-        assert client.get(f"/reconstructions/{record['id']}").json() == record
+        assert client.get(f"/generations/{record['id']}").json() == record
 
 
 def test_existing_label_can_be_given_outline_without_duplicate_equipment(tmp_path):
@@ -235,7 +235,7 @@ def test_existing_label_can_be_given_outline_without_duplicate_equipment(tmp_pat
     with TestClient(create_app(tmp_path)) as client:
         base = f"/documents/{document.id}"
         request = {"equipment_id": equipment.id, "expected_version": 1}
-        response = client.post(f"{base}/reconstruction-proposals", json=request)
+        response = client.post(f"{base}/generations", json=request)
         assert response.status_code == 422
         assert "outline first" in response.json()["detail"]
         update = client.post(
@@ -249,13 +249,5 @@ def test_existing_label_can_be_given_outline_without_duplicate_equipment(tmp_pat
         assert len(update.json()["graph"]["equipment"]) == len(document.graph.equipment)
         assert update.json()["graph"]["equipment"][-1]["tag"] == equipment.tag
         request["expected_version"] = 2
-        model = client.post(f"{base}/reconstruction-proposals", json=request)
-        assert model.status_code == 200, model.text
-        preview = client.post(
-            f"{base}/reconstruction-preview",
-            json={
-                **request,
-                "drawing": model.json(),
-            },
-        )
-        assert preview.status_code == 200, preview.text[:200]
+        generated = client.post(f"{base}/generations", json=request)
+        assert generated.status_code == 201, generated.text

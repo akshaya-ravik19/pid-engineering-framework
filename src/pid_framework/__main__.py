@@ -3,12 +3,11 @@ import json
 from pathlib import Path
 
 from pid_framework.pdf import extract_document
-from pid_framework.review import make_review
 from pid_framework.store import Store
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Local P&ID engineering workspace")
+    parser = argparse.ArgumentParser(description="Local equipment P&ID generator")
     commands = parser.add_subparsers(dest="command", required=True)
     serve = commands.add_parser("serve")
     serve.add_argument("--port", type=int, default=8765)
@@ -29,13 +28,10 @@ def main() -> None:
         store = Store(args.data)
         store.save_source(document, content)
         store.save("document", document)
-        review = make_review(document, [], False)
-        store.save("review", review)
         print(
             json.dumps(
                 {
                     "document_id": document.id,
-                    "review_id": review.id,
                     "pages": len(document.pages),
                     "equipment_candidates": len(document.graph.equipment),
                     "hold_occurrences": sum(e.id.startswith("hold-") for e in document.evidence),

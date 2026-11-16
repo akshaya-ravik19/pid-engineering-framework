@@ -3,141 +3,74 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>P&amp;ID Engineering Workspace</title>
+  <title>Equipment P&amp;ID Generator</title>
   <style>
-    *{box-sizing:border-box}body{margin:0;font:14px system-ui;color:#183047;background:#eef3f8}
-    header{background:#123047;color:white;padding:16px 22px}header h1{margin:0;font-size:23px}
-    .notice{background:#fff0c2;padding:10px 22px}main{display:grid;grid-template-columns:310px 1fr 390px;gap:12px;padding:12px}
-    section{background:white;border:1px solid #ccd6e0;border-radius:8px;padding:14px;min-width:0}
-    h2{font-size:17px;margin-top:8px}h3{font-size:14px}button,input,select,textarea{font:inherit}
-    button{background:#146c94;border:0;border-radius:4px;padding:8px 11px;color:white;cursor:pointer;margin:3px 0}
-    button:disabled{opacity:.5;cursor:wait}input,select,textarea{max-width:100%;padding:6px;border:1px solid #aebdca;border-radius:3px}
-    label{display:block;margin:9px 0}textarea{width:100%;font:12px Consolas,monospace}
-    .toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-    #viewport{overflow:auto;height:70vh;background:#d9e3ec;margin-top:10px;position:relative}
-    #sheet{position:relative;width:100%;line-height:0}#pageImage{width:100%;display:block}
+    *{box-sizing:border-box}body{margin:0;font:15px system-ui;color:#183047;background:#eef3f8}
+    header{background:#123047;color:white;padding:18px 24px}h1{margin:0;font-size:25px}
+    main{max-width:1600px;margin:auto;padding:16px;display:grid;grid-template-columns:280px 1fr;gap:16px}
+    section{background:white;border:1px solid #ccd6e0;border-radius:8px;padding:16px;min-width:0}
+    h2{font-size:19px;margin:0 0 12px}h3{font-size:16px}button,input,select{font:inherit;max-width:100%}
+    button{background:#146c94;border:0;border-radius:5px;padding:10px 13px;color:white;cursor:pointer}
+    button:disabled{opacity:.5;cursor:not-allowed}label{display:block;margin:12px 0}
+    select{padding:7px;width:100%}a{color:#075b86}.toolbar{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+    .toolbar label{margin:0}.toolbar select{width:auto}.muted{color:#526779;font-size:13px}
+    #message{padding:12px 24px;white-space:pre-wrap}#message.error{background:#ffe0e0;color:#9c1b1b}
+    #viewport{overflow:auto;height:64vh;background:#d9e3ec;margin-top:12px}
+    #sheet{position:relative;width:100%;line-height:0}#pageImage{display:block;width:100%;user-select:none;-webkit-user-drag:none}
     #overlay{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;touch-action:none}
-    #pageImage{user-select:none;-webkit-user-drag:none}
     #overlay rect{pointer-events:all;cursor:pointer;vector-effect:non-scaling-stroke}
-    .item{display:block;width:100%;text-align:left;background:#e6f2f8;color:#183047;margin:5px 0}
-    .card{padding:10px;border:1px solid #cad7e2;border-radius:5px;margin:9px 0}
-    #message{white-space:pre-wrap;padding:10px 22px;min-height:40px}#message.error{background:#ffe0e0;color:#9c1b1b}
-    .muted{color:#526779;font-size:12px}.downloads a{display:inline-block;margin:8px;color:#075b86}
-    pre{white-space:pre-wrap;overflow-wrap:anywhere}#equipmentList{max-height:42vh;overflow:auto}
-    @media(max-width:1100px){main{grid-template-columns:280px 1fr}#details{grid-column:1/-1}}
+    #output{grid-column:1/-1}#preview{max-width:100%;border:1px solid #ccd6e0}
+    .downloads{display:flex;gap:20px;flex-wrap:wrap;margin:16px 0}
+    li{margin:9px 0;overflow-wrap:anywhere}#agentsLabel{background:#eef3f8;padding:10px}
+    [hidden]{display:none!important}@media(max-width:850px){main{grid-template-columns:1fr}#viewport{height:55vh}}
   </style>
 </head>
 <body>
-<header><h1>P&amp;ID Engineering Workspace</h1><div>Evidence-linked review and equipment detail drafts</div></header>
-<div class="notice">PROTOTYPE · Reconstruct a new equipment-interface drawing from original vector symbols, lettering, and corrected connections. Automatic proposals are incomplete and require engineering review. Source crops remain a separate legacy option.</div>
-<div id="message" role="status">Upload a PDF or reopen a stored document. Processing stays local unless Azure review is explicitly enabled.</div>
+<header><h1>Equipment P&amp;ID Generator</h1><div>Upload a P&amp;ID. Select equipment. Generate a clear source-supported draft.</div></header>
+<div id="message" role="status" aria-live="polite">Start by uploading your P&amp;ID PDF. No sample drawings are preloaded.</div>
 <main>
   <section>
-    <h2>Documents</h2>
-    <input id="file" type="file" accept="application/pdf">
-    <label>Source revision <input id="revision" value="UNVERIFIED" maxlength="100"></label>
-    <button id="upload">Import PDF locally</button>
-    <label>Stored documents <select id="documents"><option value="">Choose document</option></select></label>
-    <h2>Components from the uploaded P&amp;ID</h2>
-    <label>Drawing equipment / component
-      <select id="sourceComponents" disabled><option value="">Import or open a P&amp;ID first</option></select>
-    </label>
-    <p id="componentIndexStatus" class="muted"></p>
-    <input id="search" placeholder="Search equipment tag" aria-label="Search equipment">
-    <div id="equipmentList"></div>
-    <h3>Select equipment directly on the P&amp;ID</h3>
-    <p class="muted">Click “Select equipment on drawing”, then drag around its actual symbol
-      or package outline. No tag entry is needed. Include its label when possible.
-      The selected source region anchors reconstruction; ambiguous labels are not guessed.</p>
-    <label>Type for a manually selected component
-      <select id="manualKind" aria-label="Selected component type">
-        <option value="equipment">Unclassified component</option><option value="package">Package / skid</option>
-        <option value="vessel">Vessel</option><option value="pump">Pump</option>
-        <option value="compressor">Compressor</option><option value="heat_exchanger">Heat exchanger</option>
-        <option value="valve">Valve</option><option value="instrument">Instrument</option>
-        <option value="tank">Tank</option><option value="filter">Filter</option>
-        <option value="boundary">Boundary / connector</option>
-      </select>
-    </label>
+    <h2>1. Upload your P&amp;ID</h2>
+    <label>P&amp;ID PDF (maximum 32 MiB)<input id="file" type="file" accept=".pdf,application/pdf"></label>
+    <button id="upload">Upload PDF</button>
+    <p id="filename" class="muted">No drawing uploaded.</p>
+    <h2>2. Select equipment</h2>
+    <label>Detected source labels<select id="components" disabled><option value="">Upload a PDF first</option></select></label>
+    <p class="muted">Labels are navigation aids, not a complete equipment index. You can select any supported vector symbol directly on the drawing.</p>
+    <button id="selectRegion" disabled>Select equipment on drawing</button>
+    <button id="cancelSelection" hidden>Cancel selection</button>
+    <p class="muted">Drag tightly around the equipment symbol or package outline, including its label where possible. This identifies the source symbol; it is not an output crop.</p>
+    <p id="selected">No equipment selected.</p>
+    <h2>3. Generate new P&amp;ID</h2>
+    <label id="agentsLabel" hidden><input id="agents" type="checkbox"> Use configured Microsoft agents. Sends extracted records to Azure; only enable with authorization.</label>
+    <p id="mode" class="muted">Local generation. No AI model calls.</p>
+    <button id="generate" disabled>Generate equipment P&amp;ID</button>
+    <p class="muted">Includes traceable connected equipment and pipelines on this source page. Off-page continuations stop at labeled boundaries. A newly laid-out draft, not a screenshot or crop. The source is unchanged.</p>
   </section>
   <section>
+    <h2>Original P&amp;ID</h2>
     <div class="toolbar">
-      <button id="selectRegion" disabled>Select equipment on drawing</button>
-      <button id="cancelSelection" hidden>Cancel selection</button>
-      <label>Page <select id="page"></select></label>
-      <button id="zoomOut">−</button><button id="zoomIn">+</button>
-      <a id="original" target="_blank" rel="noopener">Original PDF</a>
+      <label>Page <select id="page" disabled></select></label>
+      <button id="zoomOut" disabled aria-label="Zoom out">−</button>
+      <button id="zoomIn" disabled aria-label="Zoom in">+</button>
+      <a id="original" target="_blank" rel="noopener" hidden>Open original PDF</a>
     </div>
-    <div id="viewport"><div id="sheet"><img id="pageImage" draggable="false" alt="Source P&amp;ID page"><svg id="overlay" viewBox="0 0 1000 1000" preserveAspectRatio="none"></svg></div></div>
-    <h2>Structured review</h2>
-    <label><input id="azure" type="checkbox"> Use configured Azure agent (sends extracted records; requires authorization)</label>
-    <button id="review">Run review</button>
-    <button id="downloadReview">Download review JSON</button>
-    <div id="findings"></div>
+    <div id="viewport"><div id="sheet"><img id="pageImage" draggable="false" alt="Uploaded P&amp;ID" hidden><svg id="overlay" viewBox="0 0 1000 1000" preserveAspectRatio="none"></svg></div></div>
   </section>
-  <section id="details">
-    <h2 id="selectedTitle">Select equipment</h2>
-    <div id="selectedInfo" class="muted">Click a candidate or select a source region.</div>
-    <button id="confirm">Confirm depicted equipment</button>
-    <h3>New equipment P&amp;ID: reconstruction</h3>
-    <p class="muted">Propose an editable drawing model, correct symbols/ports/connections and
-      annotations, then preview and generate a newly composed sheet. Native PDF objects are
-      relocated and connections rerouted; this output is not a rectangular network crop.</p>
-    <button id="proposeReconstruction">Propose equipment reconstruction</button>
-    <a id="sourceObjects" target="_blank" rel="noopener">Source object / stroke index</a>
-    <button id="addDrawingSymbol">Add missing source symbol</button>
-    <button id="addDrawingText">Add source annotation</button>
-    <details><summary>Move or remove extracted elements</summary><div id="drawingNodeControls"></div></details>
-    <p class="muted">Edit source regions, normalized destination positions, ports and connections.
-      Add source symbol nodes for omitted valves/instruments, and text_only nodes for notes.
-      source_object_id cites the source stroke used for a connection. Proposed extraction
-      currently covers horizontal boundary crossings only.</p>
-    <textarea id="reconstructionModel" rows="14" aria-label="Reconstruction drawing model">{}</textarea>
-    <button id="showReconstructionRegions">Show symbol source regions</button>
-    <button id="previewReconstruction">Preview reconstructed sheet</button>
-    <img id="reconstructionPreview" alt="Reconstructed drawing preview" hidden style="width:100%">
-    <pre id="reconstructionWarnings" class="muted"></pre>
-    <label><input id="confirmReconstruction" type="checkbox">
-      I corrected and verified the source symbols, all required external connections,
-      instruments, flow indications, specifications, and notes. Not design approval.</label>
-    <button id="generateReconstruction">Generate new equipment P&amp;ID PDF</button>
-    <div id="reconstructionExports" class="downloads"></div>
-    <details><summary>Legacy source crop export (not reconstruction)</summary>
-    <h3>Original-fidelity equipment P&amp;ID</h3>
-    <p class="muted">1. Select the actual depicted equipment region. 2. Propose connected linework.
-      3. Inspect and adjust the orange boundary. 4. Add detached specifications/notes as
-      additional source crops. The PDF preserves original graphics and lettering at source scale.</p>
-    <button id="traceBoundary">Propose connected boundary</button>
-    <button id="adjustCrop">Draw replacement equipment boundary</button>
-    <button id="addNoteCrop">Add notes / specification region</button>
-    <p class="muted">First region is the equipment crop. Each further region becomes a separate
-      PDF page, in the same original style. Change page numbers/coordinates here if needed.</p>
-    <textarea id="cropRegions" rows="7" aria-label="Original PDF crop regions">[]</textarea>
-    <button id="previewCrops">Preview crop boundaries</button>
-    <pre id="traceWarnings" class="muted"></pre>
-    <label><input id="confirmCrops" type="checkbox"> I checked the boundaries and included
-      all required source specifications and notes. This is not design approval.</label>
-    <button id="exportOriginal">Export original-fidelity P&amp;ID PDF</button>
-    <div id="originalExports" class="downloads"></div>
-    </details>
-    <details><summary>Optional generic detail sketch (not original format)</summary>
-    <h3>Source-linked specification entries</h3>
-    <p class="muted">Use evidence IDs from the document JSON. Entries are engineer assertions, not automatically verified facts.</p>
-    <textarea id="specifications" rows="6" aria-label="Equipment specifications">[]</textarea>
-    <button id="saveSpecs">Save specification entries</button>
-    <h3>Graph editor</h3>
-    <p class="muted">Add valves, instruments, and boundaries through region selection. Connections require existing source/target equipment IDs, a description, evidence_ids, and explicit confirmed=true. Save before generating.</p>
-    <textarea id="graph" rows="10" aria-label="Engineering graph JSON"></textarea>
-    <button id="saveGraph">Validate and save graph</button>
-    <a id="documentJson" target="_blank" rel="noopener">Document / evidence JSON</a>
-    <h3>Equipment detail draft</h3>
-    <label><input type="checkbox" id="connected" checked> Include confirmed connected equipment</label>
-    <label>Stop traversal at IDs (comma-separated)<input id="boundaries"></label>
-    <label><input type="checkbox" id="proposals" checked> Include proposed engineering review tasks</label>
-    <button id="generate">Generate draft detail drawing</button>
-    <div id="exports" class="downloads"></div>
-    </details>
-    <details><summary>Document limitations</summary><pre id="limitations"></pre></details>
+  <section id="output" hidden>
+    <h2>Equipment P&amp;ID draft</h2>
+    <p><strong>Not for construction or design approval.</strong> Missing information is not evidence that a component is absent from the installation.</p>
+    <p id="summary"></p>
+    <p id="generationMode" class="muted"></p>
+    <div class="downloads"><a id="downloadPdf">Download drawing + explanation PDF</a><a id="downloadJson" target="_blank" rel="noopener">Download source and generation details</a></div>
+    <p class="muted">Preview is a system overview. For large networks, download the vector PDF and zoom in to read the original-scale symbols and lettering.</p>
+    <img id="preview" alt="Newly laid-out equipment P&amp;ID draft">
+    <h3>How to read this drawing</h3>
+    <p>The selected equipment, connected supporting symbols, and nearby source lettering are independently positioned with increased spacing on a new sheet. Traceable same-page pipelines, branches, valves, and instruments are included where their vector geometry is recognized. Interior line crossings alone do not join. B labels identify source line ends or recognized off-page continuations; other pages are not followed. Connectivity is geometric, not process-verified. Original symbol scale is retained.</p>
+    <h3 id="boundariesHeading" hidden>System boundaries</h3><ul id="systemBoundaries"></ul>
+    <h3>Source information</h3><ul id="evidence"></ul>
+    <div id="aiExplanation" hidden><h3>AI-assisted explanations — not independently verified</h3><ul id="explanations"></ul></div>
+    <h3>Coverage and uncertainty</h3><ul id="limitations"></ul>
   </section>
 </main>
 <script src="/app.js" defer></script>

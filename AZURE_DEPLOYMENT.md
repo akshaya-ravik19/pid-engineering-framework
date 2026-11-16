@@ -1,0 +1,95 @@
+# Optional Microsoft agents and private Azure deployment
+
+No Azure resources have been provisioned and no live Azure model invocation has been verified.
+Installation and provisioning were not authorized. The Foundry readiness check is blocked
+by missing Azure Developer CLI; Azure CLI and Docker were also not found on PATH.
+
+## Activate the optional generation agents
+
+The application creates three Microsoft Agent Framework agents per AI-enabled generation:
+`SourceEvidenceAgent`, `DrawingLayoutAgent`, and `DrawingExplanationAgent`. All use the
+same configured Azure deployment. They are application-owned SDK agents, not separately
+registered Foundry hosted agents. The previous technical-review agent is no longer used.
+
+Required prerequisites:
+
+- An approved Azure OpenAI-compatible resource endpoint and an actual model deployment
+  supporting chat completions and structured outputs.
+- An authenticated identity with model-inference permissions.
+- Approved private-network connectivity and DNS to that endpoint.
+- Authorization to transmit confidential extracted records to the approved Azure resource.
+
+The existing client expects the resource inference endpoint, not a Foundry project URL.
+From the project directory, in the same PowerShell window:
+
+```powershell
+$env:PID_ENABLE_MODEL_CALLS = 'true'
+$env:PID_AZURE_ENDPOINT = 'https://REPLACE-WITH-RESOURCE.openai.azure.com/'
+$env:PID_AZURE_DEPLOYMENT = 'REPLACE-WITH-ACTUAL-DEPLOYMENT'
+$env:PID_AZURE_API_VERSION = '2024-10-21'
+& '.\.venv-prototype\Scripts\python.exe' -m pid_framework serve
+```
+
+These are placeholders. Verify API-version and model compatibility for your resource.
+Alternatively fill in `.env.example` in a new local `.env`, without overwriting existing
+settings or committing secrets.
+
+Authentication uses `DefaultAzureCredential`, not an API key in application settings.
+Use an approved developer authentication method locally and managed identity on Azure.
+
+Upload a synthetic P&ID, select equipment, enable **Use configured Microsoft agents**,
+and generate. A successful saved generation lists all three `agents_used` and
+`model_deployment`. `/health` only indicates configuration presence, not working inference.
+Model failures abort generation explicitly. They never masquerade as local success.
+Local generation remains available by leaving the optional checkbox unchecked.
+
+Extracted source text may be confidential even though PDF images are not sent.
+Use synthetic input for the initial live test. Disable calls by setting
+`PID_ENABLE_MODEL_CALLS=false` and restarting.
+
+## Private full-application architecture
+
+```text
+Authorized engineers over corporate network / approved VPN
+                           |
+Private app ingress + Microsoft Entra authentication/authorization
+                           |
+Browser workspace + FastAPI + deterministic PDF generation
+         |                     |                     |
+ Private Blob          Private database       SDK generation agents
+ originals/exports     records/versions                |
+                                            Private Azure AI endpoint
+                                            associated with Foundry
+```
+
+Foundry supplies the AI resource/project/model layer, not the complete browser application
+and PDF persistence. Private Azure Container Apps is a candidate application host, subject
+to approved topology and region.
+
+Before executable infrastructure templates or provisioning, resolve:
+
+- Subscription, resource group, approved region, budget and model quota.
+- VNet/subnet ownership, private ingress, corporate/VPN routing and private DNS.
+- Public-network-disabled AI/storage/database configuration.
+- Entra tenant, application registration, allowed engineer groups and document authorization.
+- Managed identity and least-privilege model/storage/database roles.
+- Container registry/build runner connectivity, retention, backups and logging/data-residency rules.
+
+The localhost prototype must first gain production authentication and authorization,
+configurable host/origin policy and process binding, private Blob persistence, an appropriate
+transactional database instead of local SQLite, safe logging and long-running job handling.
+Test native PDF dependencies on the target Linux container and validate private access,
+unauthorized-access rejection, persistence across restarts and synthetic end-to-end generation.
+
+Do not expose the current local app unchanged, or bypass private-access failures by opening
+public endpoints. Deployment does not remove extraction or engineering limitations.
+
+Tool installation requires approval. After approval, rerun the Foundry dependency check and
+follow the private-network/existing-code deployment workflows before provisioning.
+
+Official references:
+
+- [Install Azure Developer CLI](https://learn.microsoft.com/azure/developer/azure-developer-cli/install-azd)
+- [Azure CLI authentication](https://learn.microsoft.com/cli/azure/authenticate-azure-cli-interactively)
+- [Foundry private access](https://learn.microsoft.com/azure/foundry/how-to/configure-private-link)
+- [Python credential chains](https://learn.microsoft.com/azure/developer/python/sdk/authentication/credential-chains)

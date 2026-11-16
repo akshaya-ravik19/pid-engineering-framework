@@ -153,7 +153,7 @@ def test_nonzero_source_cropbox_mapping_preserves_visual_crop():
     assert np.array_equal(render_at_scale(source), render_at_scale(output))
 
 
-def test_extract_validation_and_persistence(tmp_path):
+def test_crop_and_boundary_exports_are_no_longer_exposed(tmp_path):
     with TestClient(create_app(tmp_path)) as client:
         doc = client.post(
             "/documents?filename=source.pdf&revision=A",
@@ -162,35 +162,8 @@ def test_extract_validation_and_persistence(tmp_path):
         ).json()
         base = f"/documents/{doc['id']}"
         request = {"equipment_id": "equipment-1", "expected_version": 1}
-        assert client.post(f"{base}/boundary-proposals", json=request).status_code == 422
-        doc = client.post(
-            f"{base}/selections",
-            json={
-                "expected_version": 1,
-                "tag": "P-101 depicted",
-                "kind": "pump",
-                "location": {"page": 1, "bbox": [0.17, 0.43, 0.26, 0.62]},
-            },
-        ).json()
-        request = {"equipment_id": doc["graph"]["equipment"][-1]["id"], "expected_version": 2}
-        proposal = client.post(f"{base}/boundary-proposals", json=request)
-        assert proposal.status_code == 200, proposal.text
-        payload = {**request, "regions": [proposal.json()["region"]], "engineer_confirmed": False}
-        assert client.post(f"{base}/original-extracts", json=payload).status_code == 422
-        payload["engineer_confirmed"] = True
-        response = client.post(f"{base}/original-extracts", json=payload)
-        assert response.status_code == 201, response.text
-        result = response.json()
-        download = client.get(f"/original-extracts/{result['id']}/drawing.pdf")
-        assert download.status_code == 200
-        assert download.content.startswith(b"%PDF-")
-        payload["expected_version"] = 1
-        assert client.post(f"{base}/original-extracts", json=payload).status_code == 409
-        payload["expected_version"] = 2
-        payload["regions"] = [{"page": 99, "bbox": [0, 0, 1, 1]}]
-        assert client.post(f"{base}/original-extracts", json=payload).status_code == 422
-    with TestClient(create_app(tmp_path)) as client:
-        assert client.get(f"/original-extracts/{result['id']}").json() == result
+        assert client.post(f"{base}/boundary-proposals", json=request).status_code == 404
+        assert client.post(f"{base}/original-extracts", json=request).status_code == 404
 
 
 def test_extract_requires_selected_source_region_and_current_version():

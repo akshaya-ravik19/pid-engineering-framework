@@ -35,8 +35,8 @@ def extract_document(content: bytes, filename: str, revision: str) -> Document:
     limitations = [
         "Text candidates include named packages and tags; "
         "they are not confirmed equipment symbols.",
-        "Pump tags may be off-sheet references; confirm before generating a schematic.",
-        "No automatic symbol, line, junction, signal, or cross-sheet connectivity extraction.",
+        "Source tags may refer to off-sheet equipment rather than depicted symbols.",
+        "No complete semantic symbol, junction, signal, or cross-sheet connectivity extraction.",
         "No project standards, datasheets, or specification completeness verification.",
     ]
     with PDF_LOCK, pdfium.PdfDocument(content) as pdf:
