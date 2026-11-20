@@ -299,7 +299,8 @@ async def test_real_microsoft_agent_sdk_with_mocked_model():
     evidence = [document.evidence[-1]]
     outputs = [
         {"evidence_ids": [evidence[0].id]},
-        {"positions": [{"node_id": n.id, "position": n.position} for n in drawing.nodes]},
+        {"positions": [{"node_id": n.id, "x": n.position[0], "y": n.position[1]}
+                       for n in drawing.nodes]},
         {
             "items": [
                 {"evidence_id": evidence[0].id, "explanation": "Selected vessel source region."}
@@ -313,6 +314,18 @@ async def test_real_microsoft_agent_sdk_with_mocked_model():
 
         content = json.dumps(outputs[len(calls)])
         calls.append(json.loads(request.content))
+        schema = calls[-1]["response_format"]["json_schema"]["schema"]
+        def check_arrays(value):
+            if isinstance(value, dict):
+                if value.get("type") == "array":
+                    assert "items" in value
+                    assert "prefixItems" not in value
+                for child in value.values():
+                    check_arrays(child)
+            elif isinstance(value, list):
+                for child in value:
+                    check_arrays(child)
+        check_arrays(schema)
         return httpx.Response(
             200,
             json={
@@ -337,6 +350,7 @@ async def test_real_microsoft_agent_sdk_with_mocked_model():
             planned, context, explanation = await agents.run("V-101", evidence, drawing)
     assert len(calls) == 3
     assert planned.connections == drawing.connections
+    assert [n.position for n in planned.nodes] == [n.position for n in drawing.nodes]
     assert context == evidence
     assert explanation.items[0].evidence_id == evidence[0].id
     assert all(call["response_format"]["type"] == "json_schema" for call in calls)

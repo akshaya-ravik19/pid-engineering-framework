@@ -11,6 +11,11 @@ connected-system drawing. No programming or JSON editing is needed.
 
 ## 1. Before you start
 
+> If startup reports that `DraftReviewRequest` or `DraftReviewEvent` cannot be imported,
+> the checkout contains unfinished draft-review code. This is a server startup issue,
+> not a problem with your PDF or Azure credentials. The steps below apply once the server
+> starts successfully.
+
 - Use a P&ID PDF that you are authorized to process.
 - The maximum upload size is **32 MiB**, with at most **50 pages**.
 - Use a supported vector PDF: its lines, symbols, and text should be native PDF content.
@@ -124,6 +129,10 @@ Three Microsoft Agent Framework agents run:
 They share the configured Azure model deployment. They receive structured records, not
 PDF images, and do not provide full visual equipment recognition or invent missing internals.
 The output labels AI explanations as not independently verified.
+
+The layout agent can move existing symbols on the new sheet, but it does not find missing
+equipment or change which items connect. The browser has no draft-review or approval
+controls. Compare the output with the original using your normal engineering review process.
 
 If the checkbox is absent, local generation is still available. An administrator can use
 the [Azure activation guide](./AZURE_DEPLOYMENT.md). A visible checkbox means settings are

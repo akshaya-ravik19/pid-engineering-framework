@@ -2,16 +2,29 @@ import json
 
 from agent_framework import Agent
 from azure.identity.aio import DefaultAzureCredential
-from pydantic import AnyHttpUrl
+from pydantic import AnyHttpUrl, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from pid_framework.models import (
+    Contract,
     DrawingLayout,
     Evidence,
     EvidenceContext,
     GenerationExplanation,
+    NodePosition,
     ReconstructionModel,
+    Score,
 )
+
+
+class AgentNodePosition(Contract):
+    node_id: str
+    x: Score
+    y: Score
+
+
+class AgentDrawingLayout(Contract):
+    positions: list[AgentNodePosition] = Field(min_length=1, max_length=500)
 
 
 class Settings(BaseSettings):
@@ -93,15 +106,25 @@ class GenerationAgents:
         selected = [known[ref] for ref in context.evidence_ids]
         response = await self.layout.run(
             common + "Position every supplied drawing node exactly once on a clear new sheet. "
-            "Only return node IDs and normalized top-left positions; do not change connections. "
+            "Only return node IDs and normalized top-left x and y coordinates; "
+            "do not change connections. "
             "Keep nodes within x=0.02..0.96, y=0.10..0.93 and avoid overlapping extents. "
             "Source region extents use source_size; convert to sheet_size before placing them. "
             "Preserve branch junctions, boundary labels, and supporting equipment relationships. "
             "Preserve relative interface order and keep line annotations near their interfaces.\n"
             + drawing.model_dump_json(),
-            options={"response_format": DrawingLayout},
+            options={"response_format": AgentDrawingLayout},
         )
-        planned = validate_layout(drawing, DrawingLayout.model_validate_json(response.text))
+        layout = AgentDrawingLayout.model_validate_json(response.text)
+        planned = validate_layout(
+            drawing,
+            DrawingLayout(
+                positions=[
+                    NodePosition(node_id=item.node_id, position=(item.x, item.y))
+                    for item in layout.positions
+                ]
+            ),
+        )
         response = await self.explanation.run(
             common
             + "Explain the supplied source evidence in plain language. Each explanation must cite "

@@ -12,6 +12,7 @@ from pid_framework.agents import Settings
 from pid_framework.generation import generate_drawing, render_generated_pdf
 from pid_framework.models import (
     Document,
+    DraftReviewRequest,
     Equipment,
     Evidence,
     GeneratedDrawing,
@@ -225,6 +226,10 @@ def create_app(data_root: Path = Path("data")) -> FastAPI:
     @app.get("/generations/{drawing_id}", response_model=GeneratedDrawing)
     def get_generation(drawing_id: UUID):
         return saved_generation(drawing_id)
+
+    @app.post("/generations/{drawing_id}/reviews", response_model=GeneratedDrawing)
+    def review_generation(drawing_id: UUID, request: DraftReviewRequest):
+        return store.review_generation(str(drawing_id), request)
 
     @app.get("/generations/{drawing_id}/drawing.pdf")
     def generated_pdf(drawing_id: UUID):

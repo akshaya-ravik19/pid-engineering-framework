@@ -26,6 +26,11 @@ The uploaded drawing is never modified.
 
 ## Start the application
 
+> **Current checkout:** The server cannot start while the draft-review API imports
+> `DraftReviewRequest` and `DraftReviewEvent`, which are not defined in the current
+> model module. The steps below describe the normal workflow once that code is completed
+> or the unfinished route is removed. Draft review is not available in the browser.
+
 From the project directory, using the existing project environment:
 
 ```powershell
@@ -37,7 +42,8 @@ Restart the server and refresh the browser after updating application code.
 
 This command assumes the environment and dependencies are already installed. For a new
 environment, Python 3.12 or later and the dependencies declared in
-[pyproject.toml](./pyproject.toml) are required.
+[pyproject.toml](./pyproject.toml) are required. If using uv, run `uv sync --locked`
+and then `uv run --locked python -m pid_framework serve` from the project directory.
 
 ## Use the framework
 
@@ -92,6 +98,10 @@ Three Microsoft Agent Framework `Agent` instances run sequentially:
 All three use the **same configured Azure deployment**, `PID_AZURE_DEPLOYMENT`; no model
 is hardcoded. Ordinary Python code orchestrates the typed handoffs. There is no active
 LangGraph runtime, autonomous tool-use loop, or separately registered Foundry hosted agent.
+
+The layout agent returns existing node IDs with named `x` and `y` coordinates. Python
+converts them to internal drawing positions and checks coverage, bounds, and overlaps
+before rendering. The agent does not redraw pipes or change connections.
 
 The models receive structured records, **not PDF images**. Deterministic code performs
 source parsing, network tracing, rendering, and persistence. Reference validation does not

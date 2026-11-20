@@ -65,6 +65,18 @@ code. Microsoft Agent Framework supplies the optional bounded model interactions
 Legacy helpers in the repository are not evidence of an exposed review, crop, or editing
 feature. The route definitions and browser workflow determine the active application surface.
 
+### Current checkout: unfinished draft-review API
+
+The worktree wires `POST /generations/{drawing_id}/reviews` to the SQLite store.
+`DraftReviewRequest` and `DraftReviewEvent` are missing from the model module, as
+are the `GeneratedDrawing` review fields the store expects. The missing imports
+prevent API startup. The route is not operational and has no browser controls.
+
+The store code is intended to append timestamped human review events transactionally,
+check a separate review version, and require acknowledgment of source and limitations
+plus a current document version for acceptance. This is not automated technical review
+or construction approval. The current PDF renderer does not export review history.
+
 ## 3. Upload and selection
 
 1. The browser sends raw PDF bytes, not a multipart form, with a filename.
@@ -169,13 +181,18 @@ autonomous tool loop, distributed workflow checkpointing, or registered Foundry 
 | Stage | Receives | Returns | Enforced checks |
 |---|---|---|---|
 | `SourceEvidenceAgent` | Equipment name and bounded source evidence | `EvidenceContext` | Existing IDs only, no duplicate IDs |
-| `DrawingLayoutAgent` | Existing connected drawing model, source/destination sizes | `DrawingLayout` | Exactly one position for each existing node, in-bounds extents, no node overlaps |
+| `DrawingLayoutAgent` | Existing connected drawing model, source/destination sizes | `AgentDrawingLayout` with `node_id`, `x`, and `y` | Exactly one position for each existing node, in-bounds extents, no node overlaps |
 | `DrawingExplanationAgent` | Equipment name and evidence selected by stage 1 | `GenerationExplanation` | Explanation citations belong to that selected evidence context |
 
 The layout agent cannot change geometry, ports, edges, specifications, or source references:
 its output contract permits only existing node IDs and positions. The explanation agent
 does not determine the network. All deterministic source evidence remains in the output
 even when the evidence agent selects a narrower explanation context.
+
+The adapter parses named `x` and `y` fields to avoid the `prefixItems` keyword
+generated for fixed-length tuples, then converts the coordinates to internal
+`DrawingLayout` position pairs for shared validation. Local generation uses that
+internal contract directly.
 
 Instructions prohibit invented specifications, corrections, approval claims, and treating
 source strings as instructions. These instructions and valid citations do not establish

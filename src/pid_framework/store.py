@@ -3,10 +3,13 @@ import sqlite3
 import tempfile
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 
 from pid_framework.models import (
     Document,
+    DraftReviewEvent,
+    DraftReviewRequest,
     GeneratedDrawing,
     OriginalExtract,
     Package,
@@ -65,6 +68,46 @@ class Store:
 
     def document(self, record_id: str) -> Document:
         return Document.model_validate_json(self.get("document", record_id))
+
+    def review_generation(self, record_id: str, request: DraftReviewRequest) -> GeneratedDrawing:
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT payload FROM records WHERE kind='generation' AND id=?", (record_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError("Generation not found")
+            result = GeneratedDrawing.model_validate_json(row[0])
+            if result.review_version != request.expected_version:
+                raise ConflictError("Review changed. Reload the draft before saving.")
+            if request.decision == "accepted":
+                if not request.checked_source_and_limitations:
+                    raise ValueError("Acceptance requires checking source and limitations")
+                source_row = db.execute(
+                    "SELECT payload FROM records WHERE kind='document' AND id=?",
+                    (result.document_id,),
+                ).fetchone()
+                if source_row is None:
+                    raise KeyError("Source document not found")
+                document = Document.model_validate_json(source_row[0])
+                if document.version != result.document_version:
+                    raise ConflictError(
+                        "Source selection changed. Generate and review a new draft."
+                    )
+            result.review_history.append(
+                DraftReviewEvent(
+                    **request.model_dump(exclude={"expected_version"}),
+                    recorded_at=datetime.now(UTC),
+                )
+            )
+            if request.decision != "comment":
+                result.review_status = request.decision
+            result.review_version += 1
+            db.execute(
+                "UPDATE records SET payload=? WHERE kind='generation' AND id=?",
+                (result.model_dump_json(), record_id),
+            )
+        return result
 
     def documents(self) -> list[Document]:
         with self.connect() as db:

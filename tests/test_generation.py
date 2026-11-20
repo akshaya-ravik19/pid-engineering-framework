@@ -7,7 +7,7 @@ from pypdf import PdfReader
 from reportlab.pdfgen.canvas import Canvas
 from test_reconstruction import source_document
 
-from pid_framework.agents import GenerationAgents, validate_layout
+from pid_framework.agents import AgentDrawingLayout, GenerationAgents, validate_layout
 from pid_framework.api import create_app
 from pid_framework.models import (
     BoundaryRequest,
@@ -79,6 +79,42 @@ def test_symbol_only_draft_is_explicit_and_never_approved(tmp_path):
         assert not parsed.pages[0].images
         assert float(parsed.pages[0].mediabox.width) == 600
         assert "NOT FOR CONSTRUCTION" in parsed.pages[0].extract_text()
+        review_url = f"/generations/{saved['id']}/reviews"
+        review = {
+            "expected_version": 1,
+            "reviewer": "Prototype reviewer",
+            "decision": "accepted",
+            "comment": "Compared source and draft; limitations recorded.",
+        }
+        assert client.post(review_url, json=review).status_code == 422
+        review["checked_source_and_limitations"] = True
+        accepted = client.post(review_url, json=review)
+        assert accepted.status_code == 200
+        assert accepted.json()["review_status"] == "accepted"
+        assert client.post(review_url, json=review).status_code == 409
+        review.update(
+            expected_version=2, decision="changes_requested", comment="Recheck connections."
+        )
+        changed = client.post(review_url, json=review).json()
+        assert changed["review_status"] == "changes_requested"
+        assert len(changed["review_history"]) == 2
+        persisted = client.get(f"/generations/{saved['id']}").json()
+        assert persisted["review_history"] == changed["review_history"]
+        reviewed_pdf = client.get(f"/generations/{saved['id']}/drawing.pdf")
+        report = PdfReader(io.BytesIO(reviewed_pdf.content))
+        text = "".join(page.extract_text() for page in report.pages)
+        assert "changes_requested" in text
+        assert "Prototype reviewer" in text
+        assert "NOT FOR CONSTRUCTION" in text
+        client.post(
+            f"{base}/selections",
+            json={
+                "expected_version": 2,
+                "location": {"page": 1, "bbox": [0.18, 0.44, 0.26, 0.56]},
+            },
+        ).raise_for_status()
+        review.update(expected_version=3, decision="accepted")
+        assert client.post(review_url, json=review).status_code == 409
 
 
 def test_reselection_uses_latest_outline(tmp_path):
@@ -140,8 +176,8 @@ async def test_agents_reject_invented_citations(bad_stage):
     context = EvidenceContext(
         evidence_ids=["invented" if bad_stage == "evidence" else evidence[0].id]
     )
-    layout = DrawingLayout(
-        positions=[NodePosition(node_id=n.id, position=n.position) for n in drawing.nodes]
+    layout = AgentDrawingLayout(
+        positions=[{"node_id": n.id, "x": n.position[0], "y": n.position[1]} for n in drawing.nodes]
     )
     explanation = GenerationExplanation(
         items=[{"evidence_id": "invented", "explanation": "Unsupported source claim"}]
